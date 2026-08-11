@@ -1,0 +1,57 @@
+# ---- Terraform ----
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Plan files. Both forms on purpose: `*.tfplan` alone does NOT match a bare
+# file named `tfplan`, which is exactly how a plan escaped the ignore in
+# url-shortener. Plans embed resolved values and can leak secrets.
+*.tfplan
+tfplan
+tfplan.*
+plan.out
+
+# Variable files may hold config, never secrets — secrets live in SSM
+# Parameter Store. Env tfvars are deliberately tracked; gitleaks is the backstop.
+*.tfvars
+*.tfvars.json
+!infra/envs/*/*.tfvars
+
+# NOTE: .terraform.lock.hcl is intentionally NOT ignored. It pins provider
+# hashes and must be committed for reproducible builds.
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# ---- Lambda build artifacts ----
+*.zip
+.aws-sam/
+
+# ---- Credentials ----
+.aws/
+credentials
+*.pem
+.env
+.env.*
+
+# ---- macOS / editors ----
+.DS_Store
+.vscode/
+.idea/
