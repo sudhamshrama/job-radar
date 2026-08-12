@@ -174,11 +174,30 @@ data "aws_iam_policy_document" "github_deploy" {
       "iam:GetRole", "iam:CreateRole", "iam:DeleteRole", "iam:PassRole",
       "iam:TagRole", "iam:ListRolePolicies", "iam:GetRolePolicy",
       "iam:PutRolePolicy", "iam:DeleteRolePolicy",
-      "iam:ListAttachedRolePolicies", "iam:GetOpenIDConnectProvider",
+      "iam:ListAttachedRolePolicies",
     ]
     # Only roles this project owns. Without this, the pipeline could rewrite
     # any role in the account, including its own trust policy.
     resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.prefix}-*"]
+  }
+
+  # READ-ONLY on the OIDC provider, and only this one.
+  #
+  # Terraform refreshes every resource in state before planning, and the
+  # provider is in this configuration's state, so the pipeline must be able to
+  # read it. It deliberately CANNOT create, update or delete it — a pipeline
+  # able to rewrite the identity provider it authenticates through could add a
+  # second trusted issuer and let anything in.
+  #
+  # Needing this at all is further evidence for the design flaw recorded in
+  # docs/RUNBOOK.md: an account-level resource does not belong in a
+  # per-environment configuration. In `infra/shared/` the dev pipeline would
+  # never have referenced it.
+  statement {
+    sid       = "ReadOIDCProvider"
+    effect    = "Allow"
+    actions   = ["iam:GetOpenIDConnectProvider"]
+    resources = [aws_iam_openid_connect_provider.github.arn]
   }
 
   statement {
