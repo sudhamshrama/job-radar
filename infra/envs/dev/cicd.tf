@@ -16,6 +16,26 @@ variable "github_repo" {
   default     = "sudhamshrama/job-radar"
 }
 
+variable "github_repo_immutable" {
+  description = <<-EOT
+    Same repository, expressed with GitHub's immutable numeric IDs
+    (owner@ownerId/repo@repoId). This is the form that actually appears in the
+    OIDC subject claim.
+
+    Find it by reading a real token rather than guessing — the failed attempt
+    is in CloudTrail:
+
+      aws cloudtrail lookup-events \
+        --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRoleWithWebIdentity
+
+    or from the API:
+
+      gh api repos/<owner>/<repo> --jq '{owner: .owner.id, repo: .id}'
+  EOT
+  type        = string
+  default     = "sudhamshrama@68714390/job-radar@1332426770"
+}
+
 # Account-level, created once. AWS now verifies GitHub's certificate chain
 # natively, so no thumbprint list to maintain and go stale.
 resource "aws_iam_openid_connect_provider" "github" {
@@ -50,13 +70,33 @@ data "aws_iam_policy_document" "github_assume" {
       values   = ["sts.amazonaws.com"]
     }
 
-    # Scoped to this repository. `repo:owner/name:*` allows any branch, tag or
-    # pull request from this repo — narrow enough here, since the apply job is
-    # additionally gated by a GitHub environment.
+    # Scoped to this repository.
+    #
+    # GITHUB NOW ISSUES IMMUTABLE IDs IN THE SUBJECT CLAIM.
+    #
+    # Every tutorial says the sub looks like:
+    #
+    #     repo:owner/name:ref:refs/heads/main
+    #
+    # The token GitHub actually presented, read out of CloudTrail:
+    #
+    #     repo:sudhamshrama@68714390/job-radar@1332426770:ref:refs/heads/main
+    #
+    # The numeric IDs are the account ID and repository ID. This is a GitHub
+    # hardening measure: names can be renamed, transferred, deleted and
+    # re-registered by someone else, and a name-based trust policy would follow
+    # the name to the new owner. Numeric IDs cannot be reassigned.
+    #
+    # So pinning the IDs is not a workaround — it is STRICTER than the
+    # documented form. Both patterns are accepted because a StringLike value
+    # list is an OR, and the legacy format is still emitted in some contexts.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repo}:*"]
+      values = [
+        "repo:${var.github_repo}:*",
+        "repo:${var.github_repo_immutable}:*",
+      ]
     }
   }
 }
