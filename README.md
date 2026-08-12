@@ -6,8 +6,9 @@ Scheduled ingestion from public job-board APIs → queue → normalize → store
 notify on matches, with a static dashboard over a read API. Built to run inside
 the AWS always-free tier.
 
-> **Status: Stage 0 of 9 — guardrails.** This README describes what exists today
-> and grows as stages land. Nothing is deployed yet.
+> **Status: Stage 1 of 9 complete.** This README describes what exists today and
+> grows as stages land. Deployed so far: cost budgets and the Terraform state
+> backend. No application resources yet.
 
 ## Why this exists
 
@@ -87,8 +88,8 @@ The guardrails script refuses to run with root credentials and is idempotent.
 
 | # | Stage | Status |
 |---|---|---|
-| 0 | Account guardrails and tooling | in progress |
-| 1 | Terraform state backend bootstrap | |
+| 0 | Account guardrails and tooling | ✅ done |
+| 1 | Terraform state backend bootstrap | ✅ done |
 | 2 | Ingest logic, local, with tests | |
 | 3 | First deploy — schedule → Lambda → DynamoDB | |
 | 4 | Decouple with SQS + DLQ, idempotent writes | |
