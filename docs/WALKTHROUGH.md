@@ -3,8 +3,11 @@
 A plain-English record of every decision, trap, and mistake in this project, in
 the order they happened. Written so you can defend this work out loud.
 
-Covers: **Stage 0 (account guardrails)**, **Stage 1 (Terraform state backend)**,
-and **Stage 2 (source selection)** — everything through 2026-08-12.
+Covers all nine stages, from an empty AWS account to a live public dashboard.
+
+**Live:** https://d18zgxdvd2esd3.cloudfront.net
+**Source:** https://github.com/sudhamshrama/job-radar
+**Total AWS spend: $0.00**
 
 ---
 
@@ -16,6 +19,7 @@ and **Stage 2 (source selection)** — everything through 2026-08-12.
 4. [Stage 1 — the Terraform state backend](#4-stage-1--the-terraform-state-backend)
 5. [Stage 2 — picking job sources](#5-stage-2--picking-job-sources)
 6. [Every mistake made, and what it taught](#6-every-mistake-made-and-what-it-taught)
+6a. [Stages 3–9 — what got built, and what broke](#6a-stages-39--what-got-built-and-what-broke)
 7. [Glossary](#7-glossary)
 8. [Interview questions this project answers](#8-interview-questions-this-project-answers)
 
@@ -53,20 +57,37 @@ value came from things that broke when it ran, not from the architecture diagram
 
 ## 2. The architecture we're building
 
+**As designed on paper:**
+
 ```
-EventBridge Scheduler (cron)
+ingest Lambda ──► SQS ──► normalize Lambda ──► DynamoDB
+```
+
+**As actually built:**
+
+```
+EventBridge Scheduler (every 6h)
         │
         ▼
-  ingest Lambda ──► SQS ──► normalize Lambda ──► DynamoDB
-        │            │                              │
-  public board      DLQ                      DynamoDB Streams
-     APIs                                           │
+  ingest Lambda ─────────────────────────────► DynamoDB
+   (94 sources, normalizes in-process,              │
+    US-only filter, idempotent writes)      DynamoDB Streams
+                                             (filtered: INSERT only)
+                                                    │
                                                     ▼
                                             notify Lambda ──► SNS ──► email
+                                                    │
+                                                  on failure
+                                                    ▼
+                                                SQS DLQ
 
   CloudFront ──► S3 (static dashboard)
        └──────► API Gateway (HTTP API) ──► query Lambda ──► DynamoDB
 ```
+
+**The queue between ingest and normalize was deliberately removed.** See
+section 6a — deciding *not* to build something is a design decision too, and a
+better interview answer than a diagram you followed.
 
 **Everything sits in an AWS always-free tier**, with two tracked exceptions
 (API Gateway and S3 are free for 12 months, not forever).
@@ -473,6 +494,219 @@ You may run 'aws login --profile new-profile-name' ...
 
 ---
 
+## 6a. Stages 3–9 — what got built, and what broke
+
+### Stage 3 — the pipeline goes live
+
+94 sources, one Lambda, one DynamoDB table, a schedule and two alarms.
+
+**The single most important cost decision in the project:** DynamoDB is
+`PROVISIONED` at 5 read / 5 write capacity units, **not** `PAY_PER_REQUEST`.
+The always-free 25 RCU/WCU allowance applies only to provisioned mode. On-demand
+bills from the first request. Switching it "for convenience" is exactly how a
+$0 serverless project starts costing money.
+
+Second: the CloudWatch log group is created **explicitly** in Terraform. If you
+let Lambda auto-create it, it has *no retention policy* and keeps logs forever,
+quietly eating the 5 GB free allowance. This one catches almost everybody.
+
+**Two alarms, and the second is the interesting one:**
+
+- `ingest-total-failure` — fires only when **every** source fails.
+- `ingest-not-running` — fires when there are **no invocations in 24h**.
+
+The second exists because a schedule that silently stops firing produces *no
+errors at all*. Nothing is broken; the data just goes quietly stale. That is
+the failure you never notice. Alarm on absence, not only on errors.
+
+**And the design that keeps the first alarm useful:** with 94 sources, the
+chance all of them work on a given run is not 1. Companies retire job boards
+without notice. So one dead board is logged, never alarmed — the handler raises
+only when *everything* fails. An alarm that fires on routine partial failure
+gets muted within a week, and then it is not an alarm.
+
+### The apply that failed on a green plan
+
+Reserved Lambda concurrency was added as a cost control. `terraform plan` was
+clean: 13 to add, 0 errors. The apply died partway through:
+
+```
+InvalidParameterValueException: Specified ReservedConcurrentExecutions for
+function decreases account's UnreservedConcurrentExecution below its minimum
+value of [10].
+```
+
+The account's concurrency limit is **10**, not the usual 1000 — new accounts
+start low. AWS requires at least 10 *unreserved*. Total is 10. So reserving
+even 1 is rejected. **The intersection of "allowed" and "possible" is empty.**
+
+This is `url-shortener`'s AKS quota wall in a different service, and the same
+lesson:
+
+> **`terraform plan` validates configuration, not authorization.**
+
+Service quotas and account policy are evaluated by the provider at *create*
+time. Terraform cannot know your concurrency quota by reading your config.
+
+Also worth noticing: the partial apply left four resources created and the
+fifth failed. The corrected re-apply reported `5 added, 1 destroyed` rather
+than rebuilding everything — remote state doing exactly its job.
+
+Full write-up: [ADR 0005](decisions/0005-lambda-concurrency-quota.md).
+
+### Stages 5–6 — the read path and a queue that was deleted
+
+The query Lambda's IAM policy grants `dynamodb:Query` **on the GSI only**. Not
+the base table. No write actions. If someone later changes the handler to
+`Scan`, it fails with `AccessDenied` instead of quietly billing for every item
+in the table. That is IAM used as a cost control, not just a security one.
+
+It queries N date buckets rather than scanning. A Scan reads — and bills for —
+every item regardless of how few match, so its cost grows with table size. At
+270 items the difference is invisible; the point is that it stays correct at
+270,000.
+
+**The queue that was not built.** The plan called for SQS between ingest and
+normalize. It was removed after being designed, because normalization is
+in-process JSON parsing — a queue there adds a component, an IAM policy, a
+retry configuration and a failure mode while removing none. The real problem it
+would have addressed, partial failure, is already handled by per-source
+isolation.
+
+SQS *is* used where it earns its place: as a dead-letter queue on the DynamoDB
+Streams consumer, where a poison record otherwise blocks a shard until it
+expires. During that work a source queue was written and then deleted too —
+nothing would have sent messages to it. It existed only because the pattern
+usually has one.
+
+> Being able to say "I removed a queue from my own design, and here is why" is
+> worth more in an interview than any architecture diagram.
+
+### Three constraints that refused to cooperate
+
+1. **`templatefile()` cannot render the dashboard.** The page is full of
+   JavaScript template literals (`${...}`), which Terraform parses as its own
+   interpolation syntax. Rather than escaping dozens of them, the API URL is
+   injected through a generated `config.js`.
+2. **CloudFront's legacy access logging requires S3 ACLs** — which modern
+   buckets disable by default (`BucketOwnerEnforced`) and which security
+   scanners flag if you re-enable them. The secure default is *incompatible*
+   with the legacy feature. Logging was removed rather than weakening the bucket.
+3. **`minimum_protocol_version` is silently ignored** with the default
+   `*.cloudfront.net` certificate. It was removed rather than left as config
+   that reads like a security control while doing nothing. A TLS 1.2 floor
+   needs a custom domain, which needs paid DNS.
+
+### The US-only filter — three false positives, three different bugs
+
+All three were found by **reading rows in the deployed database**. Every test
+passed throughout.
+
+1. **`", or"` matched Oregon.** A Toronto role passed the US filter because its
+   *title* read `"(Mid, Senior, or Staff)"`. The docstring literally said "OR is
+   an English word" — and the code did not defend against it. → State codes now
+   match the structured location field only, never prose.
+
+2. **`"Canada - Toronto, CA"` matched California.** `"India - Hyderabad, IN"`
+   matched Indiana. Job boards write ISO **country** codes in exactly the same
+   comma format as US **state** codes. → The country-name check now runs
+   *before* the abbreviation check; a spelled-out "Canada" outranks two letters.
+
+3. **`"usa"` matched inside `"thousands"`** — *tho-USA-nds*. A Berlin/EU-remote
+   posting passed because its description said "used by tens of thousands of
+   teams". Plain substring matching with no word boundaries. → All markers now
+   match on token boundaries.
+
+Each is now a regression test quoting the exact string that caused it.
+
+**A fourth thing, operational rather than a bug:** a filter applies at *write*
+time. Tightening it does not clean data already stored. 103 pre-filter rows sat
+in the table looking like filter failures until the table was purged and
+re-ingested.
+
+**One ambiguity was documented rather than solved:** `"Ontario, CA"` resolves as
+California, because Ontario is both a Canadian province and a real city in
+California. The whole module is deliberately tuned to let a few extras through
+rather than drop genuine US roles — a job board that hides real matches is
+worse than one showing a few extras.
+
+### Stage 7 — one dashboard, not three
+
+CloudWatch's free tier includes 3 dashboards. This uses **one**, because three
+specialised dashboards nobody opens are worth less than one that gets checked.
+
+Every widget answers a question rather than displaying a metric because the
+metric exists — including "how close is ingest to its 600s timeout?", since a
+run creeping toward the ceiling fails by *truncating*, not by erroring.
+
+The log-query widget listing recent source failures only works because logging
+is structured JSON. A plain-text log line cannot be parsed into queryable
+fields — which is precisely the trap `url-shortener` hit when uvicorn's loggers
+bypassed the JSON formatter.
+
+### Stage 8 — CI that holds no credentials
+
+GitHub Actions authenticates via **OIDC**: it exchanges a signed identity token
+for short-lived AWS credentials. No access key is stored in GitHub secrets, so
+there is nothing to leak, rotate, or forget to rotate.
+
+Crucially, **OIDC does not require AWS Organizations** — which is what made it
+viable after Identity Center was ruled out for expiring the free-tier credits.
+
+The trust policy checks **two** conditions, and the second is the one people
+miss:
+
+```hcl
+"token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+"token.actions.githubusercontent.com:sub" = "repo:sudhamshrama/job-radar:*"
+```
+
+`aud` alone is worthless — `sts.amazonaws.com` is the audience for *every*
+GitHub repository on the internet. Without the `sub` condition, any repo
+anywhere could assume the role.
+
+The deploy role is broad, and the honest reason is that Terraform must manage
+resources whose ARNs do not exist at plan time. What actually constrains it is
+structural: it cannot create IAM users or access keys (so a compromise cannot
+mint a permanent credential), cannot call `iam:UpdateAssumeRolePolicy` (so it
+cannot widen its own trust), is scoped to `job-radar-dev-*` roles, and has
+**read-only** access to Budgets so it can never disable the cost guardrails it
+is checked against.
+
+The pipeline gates on cheap things first: lint, tests (fully offline — `moto`
+mocks AWS) and checkov all run before anything touches AWS. The deploy job
+smoke-tests the live API afterwards, because an apply that "succeeded" while
+the API returns 500 is a failed deploy.
+
+### Stage 9 — cost, and a flaw found while writing the teardown
+
+**Total AWS spend: $0.00.** Verified through Cost Explorer, not assumed.
+
+`terraform plan -destroy` enumerates **45 resources** with no orphans — the
+configuration accounts for everything that exists.
+
+Writing the teardown runbook surfaced a genuine design flaw:
+`aws_iam_openid_connect_provider` is an **account-level** resource (one per AWS
+account, shared by every workflow) that lives in a **per-environment**
+configuration, with `prevent_destroy` set. A full `terraform destroy` of dev
+would delete most resources and then refuse on that one, leaving the
+environment half-destroyed.
+
+It belongs in a separate `infra/shared/` root module alongside the state
+backend. It was left in place and documented rather than rushed, because the
+lesson is the valuable part:
+
+> **Account-scoped resources do not belong in per-environment configurations.**
+> If a second environment existed, it would fail to create a provider that
+> already exists.
+
+A full destroy/rebuild drill was deliberately **not** run: CloudFront domains
+are not recoverable, so a rebuild issues a new URL and breaks every link to the
+dashboard. The procedure is documented and the destroy plan verified instead.
+That is a real trade-off, stated rather than hidden.
+
+---
+
 ## 7. Glossary
 
 Terms used above, in plain language.
@@ -541,5 +775,70 @@ Practise saying these out loud. The answers are yours — you made these calls.
 
 ---
 
-*Stages 0–2 complete. Next: the ingest Lambda, normalization across three source
-shapes, pytest with `moto`, then Terraform for the schedule and DynamoDB table.*
+**"Your plan passed and the deploy still failed — how?"**
+> `terraform plan` validates configuration, not authorization. I set reserved
+> Lambda concurrency; the plan was green and the apply was rejected because the
+> account's concurrency quota is 10 and AWS requires 10 unreserved. Quotas and
+> policy are evaluated at create time, so a green plan in CI is never a promise.
+
+**"How does your CI authenticate to AWS?"**
+> GitHub OIDC — it exchanges a signed token for short-lived credentials, so no
+> access key is stored anywhere. The trust policy checks both `aud` and `sub`;
+> `aud` alone is `sts.amazonaws.com` for every repo on GitHub, so without the
+> `sub` condition any repository could assume the role.
+
+**"Tell me about a bug your tests didn't catch."**
+> Three, all in the US location filter, all found by reading rows in the
+> deployed table. The best one: "usa" matched inside "thousands" — tho-USA-nds —
+> so a Berlin role was classified as US. Substring matching with no word
+> boundaries. Every one is now a regression test quoting the string that caused it.
+
+**"How do you decide what NOT to build?"**
+> My design had SQS between ingest and normalize. I deleted it: normalization is
+> in-process JSON parsing, so the queue added a component, an IAM policy, a retry
+> config and a failure mode while removing none. I used SQS where it earns its
+> place instead — a DLQ on the stream consumer, where a poison record otherwise
+> blocks a shard until it expires.
+
+**"What would you do differently?"**
+> The GitHub OIDC provider is account-scoped but I put it in a per-environment
+> config with `prevent_destroy`, so a full destroy of dev fails partway. It
+> belongs in a shared root module with the state backend. If a second
+> environment existed it would fail outright, because the provider already exists.
+
+**"How would you monitor this?"**
+> Two alarms that matter. One fires only when every source fails, because with
+> 94 sources partial failure is routine and an alarm that fires on routine
+> events gets muted. The other fires on the *absence* of invocations for 24h —
+> a schedule that silently stops produces no errors at all, the data just goes
+> stale. That is the failure you never notice.
+
+---
+
+## 9. What this cost
+
+**$0.00.** Verified in Cost Explorer, not assumed.
+
+The decisions that kept it there:
+
+| Decision | Saved |
+|---|---|
+| DynamoDB `PROVISIONED`, not on-demand | on-demand has no always-free tier |
+| No EKS | ~$73/mo control plane |
+| No NAT Gateway / no VPC on Lambda | ~$32/mo |
+| No Route 53 hosted zone | $0.50/mo |
+| SSE-S3 instead of customer-managed KMS (×4) | ~$1/mo each |
+| Explicit log groups with 14-day retention | logs otherwise retained forever |
+| No PITR on a reproducible cache | per-GB backup charges |
+| Stream filter on `INSERT` at the event source | ~800 Lambda invocations/day |
+| HTTP API instead of REST API | ~70% per-request |
+| Did not enable AWS Organizations | the entire $100 credit balance |
+
+**Free plan expires 2027-02-10.** AWS suspends service rather than billing —
+the right failure mode for a $0 budget, but the dashboard URL goes dark then.
+Screenshots and the write-up exist so the project still reads afterwards.
+
+---
+
+*All nine stages complete. Live at https://d18zgxdvd2esd3.cloudfront.net —
+94 sources, ~270 US DevOps roles, refreshed every 6 hours, $0.00 spent.*

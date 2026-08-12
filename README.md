@@ -7,17 +7,13 @@ with a static dashboard over a read API. Runs inside the AWS always-free tier.
 
 ### 🔗 Live: **https://d18zgxdvd2esd3.cloudfront.net**
 
-> **Status: 6 of 9 stages complete.** Ingest runs every 6 hours and currently
-> holds **~200 DevOps roles** from 14 sources. Observability, CI/CD and the
-> teardown drill remain.
+> **Status: complete.** Ingest runs every 6 hours across **94 sources** and
+> holds **~270 US DevOps roles**. Total AWS spend: **$0.00**.
 
 ```
 $ aws lambda invoke --function-name job-radar-dev-ingest /dev/stdout
-{ "sources_total": 14, "sources_failed": 0,
-  "jobs_found": 202, "jobs_unique": 202, "jobs_written": 202, "failures": [] }
-
-$ curl -s "$API/jobs?days=30&limit=3" | jq '.total_matched'
-187
+{ "sources_total": 94, "sources_failed": 0, "jobs_before_us_filter": 478,
+  "jobs_found": 270, "jobs_written": 270, "failures": [] }
 ```
 
 ## Why this exists
@@ -105,9 +101,13 @@ The guardrails script refuses to run with root credentials and is idempotent.
 | 4 | Idempotent writes; DLQ deferred to the notify path (see below) | ✅ done |
 | 5 | Read path — HTTP API + query Lambda | ✅ done |
 | 6 | Dashboard on S3 + CloudFront | ✅ done |
-| 7 | Observability — structured logs, X-Ray, alarms | |
-| 8 | CI/CD — OIDC, plan-on-PR, apply-on-merge, checkov | |
-| 9 | Cost review, destroy/rebuild drill, write-up | |
+| 7 | Observability — structured logs, X-Ray, dashboard, alarms | ✅ done |
+| 8 | CI/CD — OIDC, plan-on-PR, apply-on-merge, checkov | ✅ done |
+| 9 | Cost review, teardown runbook, write-up | ✅ done |
+
+**All nine stages complete.** Full plain-English write-up of every decision and
+every bug: **[docs/WALKTHROUGH.md](docs/WALKTHROUGH.md)**. Operations:
+[docs/RUNBOOK.md](docs/RUNBOOK.md).
 
 ## A queue I chose not to build
 

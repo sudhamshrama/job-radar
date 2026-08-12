@@ -1,0 +1,124 @@
+name: CI
+
+# Runs on every push and PR. No AWS credentials are needed for lint, tests or
+# the security scan — those run entirely offline (moto mocks AWS), so the
+# expensive, credential-requiring job only runs when the cheap ones pass.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Must match the Lambda runtime, NOT the newest Python available.
+          # The local dev machine runs 3.14, which Lambda does not offer —
+          # testing on a version you cannot deploy to is testing the wrong thing.
+          python-version: "3.13"
+          cache: pip
+
+      - run: pip install -r requirements-dev.txt
+
+      - name: ruff
+        run: ruff check src tests
+
+      - name: pytest
+        # No AWS credentials: moto intercepts boto3 entirely.
+        run: pytest -q
+
+  security:
+    name: checkov
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: bridgecrewio/checkov-action@master
+        with:
+          directory: infra
+          quiet: true
+          # Skips are declared inline in the Terraform with a written reason.
+          # Nothing is suppressed here, so a new finding fails the build.
+          soft_fail: false
+
+  terraform:
+    name: Validate and plan
+    runs-on: ubuntu-latest
+    needs: [test, security]
+    # OIDC needs permission to request the token. Without `id-token: write`
+    # the credential exchange fails with a confusing 400.
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+          # Short-lived. Nothing is stored in GitHub secrets.
+          role-session-name: job-radar-ci-${{ github.run_id }}
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: terraform init
+        working-directory: infra/envs/dev
+        run: terraform init -input=false
+
+      - name: terraform validate
+        working-directory: infra/envs/dev
+        run: terraform validate
+
+      - name: terraform plan
+        id: plan
+        working-directory: infra/envs/dev
+        run: |
+          terraform plan -input=false -no-color -out=tfplan | tee plan.txt
+          echo "summary=$(grep -E '^Plan:|No changes' plan.txt | tail -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let plan = fs.readFileSync('infra/envs/dev/plan.txt', 'utf8');
+            // GitHub rejects comments over 65536 characters.
+            if (plan.length > 60000) plan = plan.slice(0, 60000) + '\n... truncated ...';
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: [
+                '### Terraform plan',
+                '`${{ steps.plan.outputs.summary }}`',
+                '',
+                '<details><summary>Full plan</summary>',
+                '',
+                '```terraform',
+                plan,
+                '```',
+                '</details>',
+                '',
+                '> A green plan is not a promise the apply will work — service',
+                '> quotas and account policy are evaluated at create time. See',
+                '> `docs/decisions/0005-lambda-concurrency-quota.md`.',
+              ].join('\n')
+            });

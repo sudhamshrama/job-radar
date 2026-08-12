@@ -1,0 +1,81 @@
+name: Deploy
+
+# Apply runs only on main, only after CI passes, and only through a GitHub
+# environment so the job can be required to wait for approval.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Two applies at once would race for the Terraform state lock. The lock would
+  # hold correctly, but the second run fails confusingly — better to queue.
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: terraform apply (dev)
+    runs-on: ubuntu-latest
+    # Never deploy off the back of a failed CI run.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    # Attach required reviewers or a wait timer to this environment in repo
+    # settings to gate production applies.
+    environment: dev
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: job-radar-deploy-${{ github.run_id }}
+
+      - name: terraform init
+        working-directory: infra/envs/dev
+        run: terraform init -input=false
+
+      - name: terraform apply
+        working-directory: infra/envs/dev
+        run: terraform apply -input=false -auto-approve
+
+      - name: Smoke test the deployed API
+        working-directory: infra/envs/dev
+        # An apply that "succeeded" while the API returns 500 is a failed
+        # deploy. Verify the thing works, do not trust the exit code.
+        run: |
+          API=$(terraform output -raw api_url)
+          echo "Testing $API/jobs"
+          code=$(curl -s -o /tmp/body.json -w '%{http_code}' --max-time 45 "$API/jobs?days=7&limit=5")
+          echo "HTTP $code"
+          test "$code" = "200" || { cat /tmp/body.json; exit 1; }
+          python3 -c "import json;d=json.load(open('/tmp/body.json'));print('jobs returned:',d['count']);assert 'jobs' in d"
+
+      - name: Cost guardrail check
+        # Fails the deploy if the budgets from ADR 0001 have been removed.
+        # A pipeline that can deploy into an account with no cost alarms is a
+        # pipeline that can quietly run up a bill.
+        run: |
+          count=$(aws budgets describe-budgets \
+            --account-id "$(aws sts get-caller-identity --query Account --output text)" \
+            --query 'length(Budgets)' --output text)
+          echo "budgets configured: $count"
+          test "$count" -ge 1 || { echo "::error::No AWS budgets configured"; exit 1; }
