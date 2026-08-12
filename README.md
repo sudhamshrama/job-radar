@@ -2,24 +2,22 @@
 
 An event-driven job-posting pipeline on AWS, defined entirely in Terraform.
 
-Scheduled ingestion from public job-board APIs → queue → normalize → store →
-notify on matches, with a static dashboard over a read API. Built to run inside
-the AWS always-free tier.
+Scheduled ingestion from public job-board APIs → normalize → store → serve,
+with a static dashboard over a read API. Runs inside the AWS always-free tier.
 
-> **Status: Stage 3 of 9 complete — the pipeline is live.** Ingest runs every
-> 6 hours on a schedule and currently holds **202 DevOps roles** across 14
-> sources. Read API and dashboard are next.
+### 🔗 Live: **https://d18zgxdvd2esd3.cloudfront.net**
+
+> **Status: 6 of 9 stages complete.** Ingest runs every 6 hours and currently
+> holds **~200 DevOps roles** from 14 sources. Observability, CI/CD and the
+> teardown drill remain.
 
 ```
 $ aws lambda invoke --function-name job-radar-dev-ingest /dev/stdout
-{
-  "sources_total": 14,
-  "sources_failed": 0,
-  "jobs_found": 202,
-  "jobs_unique": 202,
-  "jobs_written": 202,
-  "failures": []
-}
+{ "sources_total": 14, "sources_failed": 0,
+  "jobs_found": 202, "jobs_unique": 202, "jobs_written": 202, "failures": [] }
+
+$ curl -s "$API/jobs?days=30&limit=3" | jq '.total_matched'
+187
 ```
 
 ## Why this exists
@@ -104,9 +102,28 @@ The guardrails script refuses to run with root credentials and is idempotent.
 | 1 | Terraform state backend bootstrap | ✅ done |
 | 2 | Ingest logic, local, with tests | ✅ done |
 | 3 | First deploy — schedule → Lambda → DynamoDB | ✅ done |
-| 4 | Decouple with SQS + DLQ, idempotent writes | |
-| 5 | Read path — HTTP API + query Lambda | |
-| 6 | Dashboard on S3 + CloudFront | |
+| 4 | Idempotent writes; DLQ deferred to the notify path (see below) | ✅ done |
+| 5 | Read path — HTTP API + query Lambda | ✅ done |
+| 6 | Dashboard on S3 + CloudFront | ✅ done |
 | 7 | Observability — structured logs, X-Ray, alarms | |
 | 8 | CI/CD — OIDC, plan-on-PR, apply-on-merge, checkov | |
 | 9 | Cost review, destroy/rebuild drill, write-up | |
+
+## A queue I chose not to build
+
+The original design put SQS between ingest and normalize. It isn't there.
+
+Normalization is in-process and CPU-trivial — parsing JSON and matching
+keywords. A queue between those two steps would add a component, an IAM policy,
+a retry configuration and a failure mode, while removing none. That is
+infrastructure existing because a diagram called for it.
+
+Partial failure, the real problem a queue would have addressed here, is handled
+directly: each of the 14 sources is isolated, and one dead board is logged
+rather than failing the run. The handler raises only when *every* source fails,
+which is the difference between "a company retired its board" and "the network
+is gone" — and it is what makes the alarm worth keeping unmuted.
+
+SQS is planned where it genuinely earns its place: as a dead-letter queue on
+the DynamoDB Streams notify consumer, where a poison record otherwise blocks a
+shard indefinitely.

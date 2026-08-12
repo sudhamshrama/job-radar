@@ -1,0 +1,291 @@
+# ---------------------------------------------------------------------------
+# Read path: API Gateway -> query Lambda, and a static dashboard on
+# S3 + CloudFront.
+# ---------------------------------------------------------------------------
+
+module "query" {
+  source = "../../modules/lambda_fn"
+
+  name       = "${local.prefix}-query"
+  handler    = "job_radar.handlers.query.handler"
+  runtime    = var.python_runtime
+  source_dir = local.source_dir
+
+  timeout     = 30
+  memory_size = 256
+
+  environment = {
+    TABLE_NAME = module.jobs_table.name
+    LOG_LEVEL  = var.log_level
+  }
+
+  policy_statements = [
+    {
+      sid     = "ReadJobs"
+      actions = ["dynamodb:Query"]
+      # Query only, and only on the index. The read path cannot write, cannot
+      # Scan, and cannot touch the base table directly — if the handler were
+      # ever changed to Scan, it would fail with AccessDenied rather than
+      # quietly running up a bill.
+      resources = [module.jobs_table.gsi_arn]
+    },
+    {
+      sid       = "XRayTracing"
+      actions   = ["xray:PutTraceSegments", "xray:PutTelemetryRecords"]
+      resources = ["*"]
+    },
+  ]
+
+  log_retention_days = var.log_retention_days
+  tags               = local.tags
+}
+
+# --- HTTP API (not REST API: ~70% cheaper and enough for one GET route) -----
+
+resource "aws_apigatewayv2_api" "http" {
+  name          = "${local.prefix}-api"
+  protocol_type = "HTTP"
+
+  cors_configuration {
+    # The dashboard is served from a CloudFront domain, so browser requests to
+    # this API are cross-origin. Locked to GET — this API has no write routes,
+    # so allowing anything else would be granting access that does not exist.
+    allow_origins = ["*"]
+    allow_methods = ["GET"]
+    allow_headers = ["content-type"]
+    max_age       = 300
+  }
+}
+
+resource "aws_apigatewayv2_integration" "query" {
+  api_id                 = aws_apigatewayv2_api.http.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = module.query.arn
+  payload_format_version = "2.0"
+}
+
+resource "aws_apigatewayv2_route" "jobs" {
+  # checkov:skip=CKV_AWS_309:Deliberately unauthenticated. This is a read-only
+  # endpoint over public job postings that are already public on the boards
+  # they came from — there is nothing to authorise access to. Abuse is bounded
+  # by stage-level throttling (10 rps / 20 burst) rather than by auth. A write
+  # route or anything user-specific would need authentication.
+  api_id    = aws_apigatewayv2_api.http.id
+  route_key = "GET /jobs"
+  target    = "integrations/${aws_apigatewayv2_integration.query.id}"
+}
+
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.http.id
+  name        = "$default"
+  auto_deploy = true
+
+  default_route_settings {
+    # The free tier is 1M requests/month for the first 12 months. Throttling
+    # bounds a runaway client or a crawler; without it a single loop could
+    # consume the month's allowance.
+    throttling_burst_limit = 20
+    throttling_rate_limit  = 10
+  }
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.api.arn
+    format = jsonencode({
+      requestId  = "$context.requestId"
+      ip         = "$context.identity.sourceIp"
+      method     = "$context.httpMethod"
+      route      = "$context.routeKey"
+      status     = "$context.status"
+      latency_ms = "$context.responseLatency"
+    })
+  }
+}
+
+resource "aws_cloudwatch_log_group" "api" {
+  # checkov:skip=CKV_AWS_158:CMK is ~$1/month; access logs hold no secrets.
+  # checkov:skip=CKV_AWS_338:14d retention is deliberate — see the Lambda module.
+  name              = "/aws/apigateway/${local.prefix}"
+  retention_in_days = var.log_retention_days
+  tags              = local.tags
+}
+
+resource "aws_lambda_permission" "api_invoke" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = module.query.name
+  principal     = "apigateway.amazonaws.com"
+  # Scoped to this API. Without source_arn, any API Gateway in any account
+  # could invoke the function.
+  source_arn = "${aws_apigatewayv2_api.http.execution_arn}/*/*"
+}
+
+# --- Static dashboard -------------------------------------------------------
+
+resource "aws_s3_bucket" "site" {
+  bucket = "${local.prefix}-site-${data.aws_caller_identity.current.account_id}"
+  tags   = local.tags
+}
+
+resource "aws_s3_bucket_public_access_block" "site" {
+  bucket = aws_s3_bucket.site.id
+
+  # The bucket stays private. CloudFront reads it through Origin Access
+  # Control; nothing is served from S3 directly. This is why the bucket can be
+  # fully blocked and still back a public website.
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "site" {
+  bucket = aws_s3_bucket.site.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_versioning" "site" {
+  bucket = aws_s3_bucket.site.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+locals {
+  index_path = "${path.root}/../../../web/index.html"
+}
+
+resource "aws_s3_object" "index" {
+  bucket       = aws_s3_bucket.site.id
+  key          = "index.html"
+  content_type = "text/html; charset=utf-8"
+
+  # Uploaded verbatim — no Terraform templating. The page is full of JavaScript
+  # template literals (`${...}`), which templatefile() parses as Terraform
+  # interpolations and rejects. The API endpoint is injected via config.js
+  # below instead, which also keeps the page independently openable.
+  source = local.index_path
+  etag   = filemd5(local.index_path)
+}
+
+# The only generated file. Small enough to read at a glance, which matters when
+# debugging "why is the dashboard calling the wrong endpoint".
+resource "aws_s3_object" "config" {
+  bucket       = aws_s3_bucket.site.id
+  key          = "config.js"
+  content_type = "application/javascript; charset=utf-8"
+
+  content = "window.JOB_RADAR_API = ${jsonencode(aws_apigatewayv2_api.http.api_endpoint)};\n"
+
+  # config.js must never be cached as long as index.html: a stale endpoint here
+  # breaks the whole page, and CachingOptimized would hold it for a day.
+  cache_control = "no-cache, max-age=0"
+}
+
+resource "aws_cloudfront_origin_access_control" "site" {
+  name                              = "${local.prefix}-oac"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+
+resource "aws_cloudfront_distribution" "site" {
+  # checkov:skip=CKV_AWS_68:AWS WAF is ~$5/month plus per-request charges,
+  # against a $0 budget. This is a read-only static page over a rate-limited
+  # GET API with no auth, no writes and no personal data.
+  # checkov:skip=CKV_AWS_310:Origin failover needs a second origin. One bucket
+  # in one region is the correct scope for a personal dashboard.
+  # checkov:skip=CKV2_AWS_32:Response headers policy is attached below; the
+  # check does not detect it on the default cache behaviour.
+  # checkov:skip=CKV_AWS_174:Not achievable with the default *.cloudfront.net
+  # certificate — AWS forces TLSv1 there and only honours a minimum protocol
+  # version for a custom ACM certificate, which needs a paid custom domain.
+  # checkov:skip=CKV_AWS_374:Geo restriction is intentionally off. This is a
+  # public job board for remote roles; restricting by country would break the
+  # actual purpose of the site.
+  enabled             = true
+  default_root_object = "index.html"
+  comment             = "${local.prefix} dashboard"
+  price_class         = "PriceClass_100" # NA + EU only; cheapest tier
+
+  origin {
+    domain_name              = aws_s3_bucket.site.bucket_regional_domain_name
+    origin_id                = "site"
+    origin_access_control_id = aws_cloudfront_origin_access_control.site.id
+  }
+
+  default_cache_behavior {
+    target_origin_id       = "site"
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET", "HEAD"]
+    cached_methods         = ["GET", "HEAD"]
+    compress               = true
+
+    # AWS managed policies, referenced by their well-known IDs.
+    cache_policy_id            = "658327ea-f89d-4fab-a63d-7e88639e58f6" # CachingOptimized
+    response_headers_policy_id = "67f7725c-6f97-4210-82d7-5512b31e9d03" # SecurityHeadersPolicy
+  }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    # The default *.cloudfront.net certificate.
+    #
+    # minimum_protocol_version is deliberately NOT set: AWS only honours it for
+    # a custom ACM certificate, and forces TLSv1 with the default certificate.
+    # Setting it here would be config that reads as a security control while
+    # doing nothing. Raising the floor to TLS 1.2 requires a custom domain,
+    # which requires paid DNS — declined for the same reason as Route 53
+    # elsewhere in this project.
+    cloudfront_default_certificate = true
+  }
+
+  # NO logging_config, deliberately.
+  #
+  # CloudFront's legacy standard logging writes to S3 using ACLs, and refuses
+  # a bucket that has them disabled:
+  #
+  #   InvalidArgument: The S3 bucket that you specified for CloudFront logs
+  #   does not enable ACL access
+  #
+  # S3 disables ACLs by default now (BucketOwnerEnforced), and re-enabling them
+  # is exactly what security scanners flag — so the legacy feature is
+  # incompatible with the current secure default. Writing logs into the same
+  # bucket that serves the site would also be wrong regardless.
+  #
+  # The modern replacement is standard logging v2 (CloudWatch Logs or Firehose),
+  # which bills per log delivered. For a personal dashboard the request-level
+  # data is not worth the spend; the API Gateway access log already records
+  # every call that reaches the backend, which is the part that matters.
+
+  tags = local.tags
+}
+
+# Only this distribution may read the bucket.
+resource "aws_s3_bucket_policy" "site" {
+  bucket = aws_s3_bucket.site.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "AllowCloudFrontOAC"
+      Effect    = "Allow"
+      Principal = { Service = "cloudfront.amazonaws.com" }
+      Action    = "s3:GetObject"
+      Resource  = "${aws_s3_bucket.site.arn}/*"
+      Condition = {
+        StringEquals = {
+          "AWS:SourceArn" = aws_cloudfront_distribution.site.arn
+        }
+      }
+    }]
+  })
+}

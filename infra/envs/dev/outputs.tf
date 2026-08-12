@@ -9,3 +9,13 @@ output "invoke_command" {
   description = "Run ingest immediately instead of waiting for the schedule."
   value       = "aws lambda invoke --function-name ${module.ingest.name} --cli-binary-format raw-in-base64-out /dev/stdout"
 }
+
+output "api_url" {
+  description = "Public read API."
+  value       = aws_apigatewayv2_api.http.api_endpoint
+}
+
+output "dashboard_url" {
+  description = "The clickable thing."
+  value       = "https://${aws_cloudfront_distribution.site.domain_name}"
+}
