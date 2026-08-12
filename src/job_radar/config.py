@@ -37,8 +37,10 @@ def _locate() -> Path:
     if packaged.exists():
         return packaged
 
-    # Local runs and tests: walk up to the repo root.
-    return Path(__file__).resolve().parents[2] / "config" / "sources.json"
+    # Local runs and tests. The file lives at src/config/sources.json so that
+    # zipping src/ produces job_radar/ alongside config/sources.json, which
+    # lands at /var/task/config/sources.json in Lambda — no build step needed.
+    return Path(__file__).resolve().parents[1] / "config" / "sources.json"
 
 
 def load(path: str | Path | None = None) -> Config:

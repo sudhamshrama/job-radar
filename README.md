@@ -6,9 +6,21 @@ Scheduled ingestion from public job-board APIs → queue → normalize → store
 notify on matches, with a static dashboard over a read API. Built to run inside
 the AWS always-free tier.
 
-> **Status: Stage 1 of 9 complete.** This README describes what exists today and
-> grows as stages land. Deployed so far: cost budgets and the Terraform state
-> backend. No application resources yet.
+> **Status: Stage 3 of 9 complete — the pipeline is live.** Ingest runs every
+> 6 hours on a schedule and currently holds **202 DevOps roles** across 14
+> sources. Read API and dashboard are next.
+
+```
+$ aws lambda invoke --function-name job-radar-dev-ingest /dev/stdout
+{
+  "sources_total": 14,
+  "sources_failed": 0,
+  "jobs_found": 202,
+  "jobs_unique": 202,
+  "jobs_written": 202,
+  "failures": []
+}
+```
 
 ## Why this exists
 
@@ -90,8 +102,8 @@ The guardrails script refuses to run with root credentials and is idempotent.
 |---|---|---|
 | 0 | Account guardrails and tooling | ✅ done |
 | 1 | Terraform state backend bootstrap | ✅ done |
-| 2 | Ingest logic, local, with tests | |
-| 3 | First deploy — schedule → Lambda → DynamoDB | |
+| 2 | Ingest logic, local, with tests | ✅ done |
+| 3 | First deploy — schedule → Lambda → DynamoDB | ✅ done |
 | 4 | Decouple with SQS + DLQ, idempotent writes | |
 | 5 | Read path — HTTP API + query Lambda | |
 | 6 | Dashboard on S3 + CloudFront | |

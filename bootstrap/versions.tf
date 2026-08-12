@@ -5,7 +5,7 @@ terraform {
 
   required_providers {
     aws = {
-      source  = "hashicorp/aws"
+      source = "hashicorp/aws"
       # Pin the major version. ">= 5.0" would silently accept a future 7.x
       # with breaking changes; the lock file pins the exact build.
       version = "~> 6.0"

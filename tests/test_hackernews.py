@@ -89,6 +89,28 @@ def test_company_name_excludes_url_bare_or_parenthesised(keywords):
     assert hackernews.normalize(parens, keywords)[0].company == "Snout"
 
 
+def test_url_as_its_own_segment_does_not_become_the_title(keywords):
+    """Regression, found in the deployed table rather than in a test.
+
+    Real header from the August 2026 thread:
+        GovStar | https://govstar.us | REMOTE - United States | Full-time
+
+    The URL is its own pipe-separated segment, so cleaning only the company
+    field left the job title reading "https://govstar.us | REMOTE - ...".
+    """
+    payload = {"children": [{
+        "id": 3, "author": "a", "created_at": "2026-08-03T15:10:00Z",
+        "text": ("Seeq | https:&#x2F;&#x2F;seeq.com | Staff Platform Engineer "
+                 "| REMOTE<p>We run Kubernetes."),
+    }]}
+
+    job = hackernews.normalize(payload, keywords)[0]
+
+    assert job.company == "Seeq"
+    assert "http" not in job.title
+    assert "Staff Platform Engineer" in job.title
+
+
 def test_html_entities_are_unescaped(keywords):
     """Comment text arrives HTML-escaped; &#x2F; is a forward slash."""
     jobs = hackernews.normalize(ITEM_PAYLOAD, keywords)

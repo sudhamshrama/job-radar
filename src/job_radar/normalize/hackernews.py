@@ -56,6 +56,11 @@ _HREF = re.compile(r'href="([^"]+)"')
 _URL_IN_TEXT = re.compile(r"\s*\(?\s*https?://\S+?\)?(?=\s|$)")
 
 
+def _strip_urls(segment: str) -> str:
+    """Remove URLs from a header segment and tidy the leftover punctuation."""
+    return _URL_IN_TEXT.sub("", segment).strip(" |-—–,")
+
+
 def _clean(text: str) -> str:
     """HTML comment text -> plain text, paragraphs preserved as newlines."""
     text = re.sub(r"<p>", "\n", text)
@@ -97,16 +102,23 @@ def normalize(payload: dict[str, Any], keywords: list[str]) -> list[Job]:
             continue
 
         header = text.split("\n", 1)[0].strip()
-        parts = [p.strip() for p in header.split("|") if p.strip()]
+
+        # Posters put their URL in the header in two different ways:
+        #
+        #   Snout https://snout.com | Senior DevOps Engineer | Remote
+        #   GovStar | https://govstar.us | REMOTE - United States | Full-time
+        #
+        # In the second form the URL is its OWN pipe-separated segment, so
+        # cleaning only the company field leaves the URL as the job title.
+        # Found by reading rows in the deployed table, not by testing.
+        #
+        # Strip URLs from every segment, then drop segments that were nothing
+        # but a URL. That collapses both forms to [company, role, location].
+        parts = [_strip_urls(p) for p in header.split("|")]
+        parts = [p for p in parts if p]
 
         company = parts[0] if parts else (comment.get("author") or "unknown")
-        # Posters put their URL next to the company name, sometimes in
-        # parentheses and sometimes bare. Both end up as plain text once the
-        # <a> tag is stripped, so strip any URL rather than only the
-        # parenthesised form.
-        company = _URL_IN_TEXT.sub("", company).strip(" |-—–")
-
-        title = " | ".join(parts[1:3]) if len(parts) > 1 else header
+        title = " | ".join(parts[1:3]) if len(parts) > 1 else _strip_urls(header)
         location = parts[2] if len(parts) > 2 else ""
 
         created = comment.get("created_at")
