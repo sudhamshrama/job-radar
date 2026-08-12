@@ -7,3 +7,8 @@ pytest>=8.0
 moto[dynamodb]>=5.0
 boto3>=1.34
 ruff>=0.6
+
+# PINNED, not a floor. checkov 3.3.0 (local brew) runs 108 checks; 3.3.10 runs
+# 136 including graph checks (CKV2_*). A scan that "passes locally" and fails in
+# CI is worse than no scan — the tool must be the same version in both places.
+checkov==3.3.10

@@ -15,6 +15,11 @@ variable "tags" {
 # 5/5 is deliberate: it leaves headroom under the 25/25 account-wide limit for
 # the GSI, which consumes its own separate capacity.
 resource "aws_dynamodb_table" "this" {
+  # checkov:skip=CKV2_AWS_16:Auto scaling is actively WRONG here. It scales
+  # provisioned capacity UP under load — straight past the 25 RCU/WCU that the
+  # always-free tier covers, turning a $0 table into a billed one with no
+  # warning. Fixed 5/5 capacity is the cost control. Autoscaling would be
+  # correct on a funded account with real traffic.
   # checkov:skip=CKV_AWS_28:Point-in-time recovery is billed per GB of backup.
   # This table is a 90-day cache of public job postings, fully reproducible by
   # re-running ingest. Paying to back up regenerable data is the wrong trade at

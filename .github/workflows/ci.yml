@@ -41,13 +41,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: bridgecrewio/checkov-action@master
+      - uses: actions/setup-python@v5
         with:
-          directory: infra
-          quiet: true
-          # Skips are declared inline in the Terraform with a written reason.
-          # Nothing is suppressed here, so a new finding fails the build.
-          soft_fail: false
+          python-version: "3.13"
+          cache: pip
+
+      # Installed from requirements-dev.txt at a PINNED version rather than
+      # using checkov-action@master.
+      #
+      # The action tracks latest: it ran 3.3.10 (136 checks) while the local
+      # brew install was 3.3.0 (108 checks), so a scan that passed locally
+      # failed in CI on eight findings that had never been seen. Identical
+      # versions in both places is the whole point of a gate.
+      - run: pip install -r requirements-dev.txt
+
+      - name: checkov
+        # Skips are declared inline in the Terraform, each with a written
+        # reason. Nothing is suppressed here, so a NEW finding fails the build.
+        run: checkov -d infra --compact
 
   terraform:
     name: Validate and plan
