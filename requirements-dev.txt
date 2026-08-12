@@ -1,0 +1,9 @@
+# Development and test dependencies only.
+#
+# The Lambda deployment package has ZERO third-party dependencies: the code uses
+# urllib from the standard library, and boto3 ships with the Lambda runtime.
+# Nothing here is deployed.
+pytest>=8.0
+moto[dynamodb]>=5.0
+boto3>=1.34
+ruff>=0.6

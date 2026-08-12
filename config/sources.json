@@ -1,15 +1,23 @@
 {
   "_comment": "Job sources for ingestion. Every endpoint here was verified live on 2026-08-12 — see docs/decisions/0004-job-source-selection.md. Greenhouse board tokens are not guessable; several plausible ones 404.",
+  "_keywords_comment": "Multi-word phrases on purpose. A bare 'infrastructure' or 'cloud' matches sales and data-centre-operations roles; measured on the cloudflare board, a loose pattern hit 43/305 including 'GTM Specialist' and 'Customer Engineer'. Precision over recall: a dashboard full of false positives is one you stop reading.",
   "match_keywords": [
     "devops",
+    "devsecops",
     "site reliability",
+    "reliability engineer",
     "sre",
     "platform engineer",
     "infrastructure engineer",
+    "systems engineer",
+    "distributed systems",
     "cloud engineer",
+    "cloud infrastructure",
+    "automation engineer",
     "kubernetes",
     "observability",
-    "terraform"
+    "terraform",
+    "ci/cd"
   ],
   "sources": [
     {
