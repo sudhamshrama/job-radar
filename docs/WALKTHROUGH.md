@@ -678,6 +678,61 @@ mocks AWS) and checkov all run before anything touches AWS. The deploy job
 smoke-tests the live API afterwards, because an apply that "succeeded" while
 the API returns 500 is a failed deploy.
 
+### Two things CI caught that local runs never would have
+
+**1. "Passes locally" meant nothing.** checkov was green locally and failed in
+CI on eight findings. The cause was not the findings — it was that
+`checkov-action@master` ran **3.3.10 (136 checks)** while the local Homebrew
+install was **3.3.0 (108 checks)**. The newer version adds graph checks
+(`CKV2_*`) that had simply never executed.
+
+The fix was the version drift, not the eight findings: checkov is now **pinned**
+in `requirements-dev.txt` and CI installs from there instead of using the
+floating action. Both run 136 checks.
+
+> A gate that passes locally and fails in CI is worse than no gate — it trains
+> you to ignore it.
+
+One of those eight is worth repeating, because the scanner was **wrong for this
+project**: `CKV2_AWS_16` wants DynamoDB auto scaling enabled. Auto scaling
+raises provisioned capacity under load — straight past the 25 RCU/WCU that the
+always-free tier covers, turning a $0 table into a billed one with no warning.
+Fixed 5/5 capacity *is* the cost control here. On a funded account with real
+traffic the check would be right.
+
+**2. The OIDC trust policy was correct and still rejected everything.**
+
+```
+Could not assume role with OIDC:
+Not authorized to perform sts:AssumeRoleWithWebIdentity
+```
+
+The provider existed. The role existed. The policy matched the documented
+subject format. `id-token: write` was set. The error names no claim and no
+condition, so there was nothing in it to act on.
+
+Rather than re-read a policy that looked right, the token GitHub actually
+presented was pulled out of CloudTrail:
+
+```
+expected:  repo:sudhamshrama/job-radar:ref:refs/heads/main
+actual:    repo:sudhamshrama@68714390/job-radar@1332426770:ref:refs/heads/main
+```
+
+GitHub now embeds **immutable numeric IDs** for the owner and repository in the
+subject claim. Every tutorial's trust policy predates it.
+
+And this is a security *improvement*, not an annoyance. Names are mutable — a
+repository can be renamed, transferred, or deleted and its name re-registered
+by someone else, and a name-based trust policy follows the name to whoever
+holds it next. Numeric IDs are never reassigned. **Pinning the IDs is stricter
+than the documented form.**
+
+> When a request is rejected on a claim you cannot see, stop reading the config
+> and go find the actual token. CloudTrail records what was presented.
+
+Full write-up: [ADR 0006](decisions/0006-github-oidc-immutable-subject.md).
+
 ### Stage 9 — cost, and a flaw found while writing the teardown
 
 **Total AWS spend: $0.00.** Verified through Cost Explorer, not assumed.
@@ -805,6 +860,13 @@ Practise saying these out loud. The answers are yours — you made these calls.
 > config with `prevent_destroy`, so a full destroy of dev fails partway. It
 > belongs in a shared root module with the state backend. If a second
 > environment existed it would fail outright, because the provider already exists.
+
+**"Your security scanner passed locally and failed in CI. What happened?"**
+> Different versions — 3.3.0 locally, 3.3.10 in CI, which adds 28 graph checks.
+> I pinned the version in requirements-dev.txt and made CI install from there
+> instead of a floating action, because a gate that disagrees with itself trains
+> you to ignore it. One of its findings was also wrong for my project: it wanted
+> DynamoDB auto scaling, which would scale me past the free-tier ceiling.
 
 **"How would you monitor this?"**
 > Two alarms that matter. One fires only when every source fails, because with
