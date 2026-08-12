@@ -1,0 +1,50 @@
+{
+  "_comment": "Job sources for ingestion. Every endpoint here was verified live on 2026-08-12 — see docs/decisions/0004-job-source-selection.md. Greenhouse board tokens are not guessable; several plausible ones 404.",
+  "match_keywords": [
+    "devops",
+    "site reliability",
+    "sre",
+    "platform engineer",
+    "infrastructure engineer",
+    "cloud engineer",
+    "kubernetes",
+    "observability",
+    "terraform"
+  ],
+  "sources": [
+    {
+      "id": "greenhouse",
+      "type": "greenhouse",
+      "url_template": "https://boards-api.greenhouse.io/v1/boards/{board}/jobs",
+      "shape": "object with `jobs` array; fields: id, title, absolute_url, updated_at, location.name",
+      "boards": [
+        "datadog",
+        "cloudflare",
+        "gitlab",
+        "databricks",
+        "stripe",
+        "elastic",
+        "mongodb",
+        "grafanalabs",
+        "circleci",
+        "pagerduty",
+        "fastly",
+        "reddit"
+      ]
+    },
+    {
+      "id": "remoteok",
+      "type": "remoteok",
+      "url": "https://remoteok.com/api",
+      "shape": "bare array; FIRST ELEMENT IS A LEGAL NOTICE, NOT A JOB — must be skipped",
+      "user_agent_required": true
+    },
+    {
+      "id": "hackernews",
+      "type": "algolia",
+      "url": "https://hn.algolia.com/api/v1/search_by_date",
+      "shape": "object with `hits` array; comment_text is unstructured free text, not fields",
+      "notes": "Who Is Hiring threads. Requires parsing prose rather than reading fields."
+    }
+  ]
+}
