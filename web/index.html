@@ -58,14 +58,16 @@
 <div class="wrap">
   <header>
     <h1>job-radar</h1>
-    <div class="sub">DevOps, SRE and platform roles, collected every 6 hours from public job boards.</div>
+    <div class="sub">DevOps, SRE and platform roles in the <strong>United States</strong>, collected every 6 hours from 94 public job boards.</div>
   </header>
 
   <div class="controls">
     <input id="q" type="search" placeholder="Filter by title or company…" autocomplete="off">
     <select id="source">
       <option value="">All sources</option>
-      <option value="greenhouse">Greenhouse boards</option>
+      <option value="greenhouse">Greenhouse</option>
+      <option value="ashby">Ashby</option>
+      <option value="lever">Lever</option>
       <option value="hackernews">Hacker News</option>
       <option value="remoteok">Remote OK</option>
     </select>
@@ -81,9 +83,9 @@
 
   <footer>
     <p>
-      Sources: public Greenhouse job boards, the Hacker News
+      Sources: public Greenhouse, Ashby and Lever job boards, the Hacker News
       <em>Who is hiring?</em> thread, and
-      <a href="https://remoteok.com" rel="noopener">Remote OK</a>.
+      <a href="https://remoteok.com" rel="noopener">Remote OK</a>, Remotive, Arbeitnow, Jobicy and Himalayas.
       Job data from <a href="https://remoteok.com" rel="noopener">Remote OK</a>.
     </p>
     <p>
@@ -122,6 +124,8 @@ function sourceLabel(source) {
   // board name IS the company, so returning it duplicated the company in the
   // meta line ("cloudflare · In-Office · cloudflare · today").
   if (source.startsWith("greenhouse:")) return "Greenhouse";
+  if (source.startsWith("ashby:")) return "Ashby";
+  if (source.startsWith("lever:")) return "Lever";
   if (source === "hackernews") return "Hacker News";
   if (source === "remoteok") return "Remote OK";
   return source;

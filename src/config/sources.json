@@ -1,5 +1,9 @@
 {
-  "_comment": "Job sources for ingestion. Every endpoint here was verified live on 2026-08-12 — see docs/decisions/0004-job-source-selection.md. Greenhouse board tokens are not guessable; several plausible ones 404.",
+  "_comment": "Every board/org token below was probed live on 2026-08-12 and returned jobs. ATS tokens are NOT derivable from company names — of 117 plausible Greenhouse guesses, 52 returned 404. See docs/decisions/0004-job-source-selection.md.",
+
+  "_us_only_comment": "Filters to roles a US-based applicant can take. Applied centrally in the ingest handler (src/job_radar/location.py), not per-source, because it is one policy. Tuned to let a few worldwide-remote roles through rather than drop genuine US roles.",
+  "us_only": true,
+
   "_keywords_comment": "Multi-word phrases on purpose. A bare 'infrastructure' or 'cloud' matches sales and data-centre-operations roles; measured on the cloudflare board, a loose pattern hit 43/305 including 'GTM Specialist' and 'Customer Engineer'. Precision over recall: a dashboard full of false positives is one you stop reading.",
   "match_keywords": [
     "devops",
@@ -8,6 +12,7 @@
     "reliability engineer",
     "sre",
     "platform engineer",
+    "platform engineering",
     "infrastructure engineer",
     "systems engineer",
     "distributed systems",
@@ -17,42 +22,68 @@
     "kubernetes",
     "observability",
     "terraform",
-    "ci/cd"
+    "ci/cd",
+    "build engineer",
+    "release engineer",
+    "production engineer"
   ],
+
   "sources": [
     {
       "id": "greenhouse",
       "type": "greenhouse",
-      "url_template": "https://boards-api.greenhouse.io/v1/boards/{board}/jobs",
-      "shape": "object with `jobs` array; fields: id, title, absolute_url, updated_at, location.name",
+      "shape": "object with `jobs` array; id, title, absolute_url, updated_at, location.name",
       "boards": [
-        "datadog",
-        "cloudflare",
-        "gitlab",
-        "databricks",
-        "stripe",
-        "elastic",
-        "mongodb",
-        "grafanalabs",
-        "circleci",
-        "pagerduty",
-        "fastly",
-        "reddit"
+        "databricks", "stripe", "doordashusa", "datadog", "mongodb", "anthropic",
+        "waymo", "okta", "lucidmotors", "cloudflare", "verkada", "brex", "oscar",
+        "samsara", "elastic", "roblox", "pinterest", "scaleai", "affirm", "gitlab",
+        "airbnb", "clickhouse", "lyft", "coinbase", "twilio", "figma", "flexport",
+        "reddit", "grafanalabs", "asana", "robinhood", "instacart", "nuro", "gusto",
+        "onetrust", "vercel", "abnormalsecurity", "duolingo", "twitch", "newrelic",
+        "mixpanel", "sofi", "chime", "fastly", "discord", "checkr", "marqeta",
+        "launchdarkly", "dropbox", "amplitude", "cockroachlabs", "pagerduty",
+        "coursera", "squarespace", "sumologic", "modernhealth", "airtable",
+        "starburst", "udemy", "planetscale", "circleci", "imply", "netlify",
+        "dremio", "orca"
       ]
     },
     {
+      "id": "ashby",
+      "type": "ashby",
+      "shape": "object with `jobs` array; id, title, location, publishedAt, jobUrl, isListed",
+      "notes": "The ATS most newer companies moved to — reaches employers Greenhouse misses.",
+      "orgs": [
+        "openai", "harvey", "sierra", "ramp", "decagon", "notion", "perplexity",
+        "vanta", "replit", "abridge", "sardine", "linear", "modal", "hex",
+        "astronomer", "openevidence", "found", "quora"
+      ]
+    },
+    {
+      "id": "lever",
+      "type": "lever",
+      "shape": "bare array; title is `text`, createdAt is epoch MILLISECONDS",
+      "notes": "Rejected in ADR 0004 after 6/7 probes 404'd; reinstated once a wider probe found live boards.",
+      "orgs": ["veeva", "palantir", "binance", "spotify", "tala"]
+    },
+    {
+      "id": "remotive",
+      "type": "aggregator",
+      "notes": "Has a real `devops` category, so filtering happens server-side."
+    },
+    { "id": "arbeitnow", "type": "aggregator" },
+    { "id": "jobicy", "type": "aggregator" },
+    { "id": "himalayas", "type": "aggregator", "notes": "locationRestrictions is a LIST, not a string." },
+    {
       "id": "remoteok",
       "type": "remoteok",
-      "url": "https://remoteok.com/api",
-      "shape": "bare array; FIRST ELEMENT IS A LEGAL NOTICE, NOT A JOB — must be skipped",
-      "user_agent_required": true
+      "shape": "bare array; FIRST ELEMENT IS A LEGAL NOTICE, NOT A JOB",
+      "notes": "Their terms require linking back and naming Remote OK as a source."
     },
     {
       "id": "hackernews",
       "type": "algolia",
-      "url": "https://hn.algolia.com/api/v1/search_by_date",
-      "shape": "object with `hits` array; comment_text is unstructured free text, not fields",
-      "notes": "Who Is Hiring threads. Requires parsing prose rather than reading fields."
+      "shape": "comments; unstructured prose, no fields",
+      "notes": "Two threads posted seconds apart monthly — 'Who is hiring' vs 'Who wants to be hired'."
     }
   ]
 }

@@ -207,6 +207,10 @@ resource "aws_cloudfront_distribution" "site" {
   # checkov:skip=CKV_AWS_374:Geo restriction is intentionally off. This is a
   # public job board for remote roles; restricting by country would break the
   # actual purpose of the site.
+  # checkov:skip=CKV_AWS_86:Legacy CloudFront access logging requires the target
+  # S3 bucket to have ACLs enabled, which conflicts with S3's BucketOwnerEnforced
+  # default and would itself be flagged. See the comment on logging_config below.
+  # API Gateway access logs already cover every request reaching the backend.
   enabled             = true
   default_root_object = "index.html"
   comment             = "${local.prefix} dashboard"

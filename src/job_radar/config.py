@@ -20,6 +20,7 @@ DEFAULT_CONFIG_PATH = "/var/task/config/sources.json"
 class Config:
     match_keywords: list[str]
     sources: list[dict[str, Any]]
+    us_only: bool = True
 
     def source(self, source_id: str) -> dict[str, Any] | None:
         for src in self.sources:
@@ -49,6 +50,7 @@ def load(path: str | Path | None = None) -> Config:
         raw = json.load(handle)
 
     return Config(
+        us_only=raw.get("us_only", True),
         match_keywords=raw.get("match_keywords", []),
         # Keys beginning with "_" are documentation, not sources.
         sources=[s for s in raw.get("sources", []) if not s.get("id", "").startswith("_")],

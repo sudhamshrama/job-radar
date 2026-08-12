@@ -68,9 +68,11 @@ module "ingest" {
   runtime    = var.python_runtime
   source_dir = local.source_dir
 
-  # Fourteen sources fetched serially, each retrying up to 3 times with
-  # backoff. The HN thread alone is a 2-call sequence over a large payload.
-  timeout     = 300
+  # 92 sources fetched serially, each retrying up to 3 times with backoff, plus
+  # the Hacker News thread which is a 2-call sequence over a large payload.
+  # Measured at ~110s locally; 600s is the ceiling for a scheduled function and
+  # leaves room for several slow boards without truncating the run.
+  timeout     = 600
   memory_size = 512
 
   environment = {

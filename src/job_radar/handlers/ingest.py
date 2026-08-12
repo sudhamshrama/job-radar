@@ -23,7 +23,32 @@ from typing import Any
 
 from job_radar import config as config_module
 from job_radar import logging_setup, store
-from job_radar.normalize import greenhouse, hackernews, remoteok
+from job_radar.location import is_us
+from job_radar.normalize import (
+    aggregators,
+    ashby,
+    greenhouse,
+    hackernews,
+    lever,
+    remoteok,
+)
+
+# Source types that fan out over a list of boards/orgs. Every board is isolated
+# separately so one retired board cannot take out the rest.
+#
+# These hold MODULES, not bound functions. Storing `greenhouse.collect` here
+# would resolve the function once at import time, which makes it unpatchable in
+# tests and — worse — means editing the module no longer changes what runs.
+MULTI_BOARD = {
+    "greenhouse": (greenhouse, "boards"),
+    "ashby": (ashby, "orgs"),
+    "lever": (lever, "orgs"),
+}
+
+SINGLE = {
+    "remoteok": remoteok,
+    "algolia": hackernews,
+}
 
 log = logging_setup.configure()
 
@@ -36,28 +61,35 @@ def _collect_all(cfg: config_module.Config) -> tuple[list, list[dict[str, Any]]]
     for source in cfg.sources:
         source_type = source.get("type")
 
-        # Greenhouse is one source entry covering many boards. Each board is
-        # isolated separately — one retired board must not take out the other
-        # eleven.
-        if source_type == "greenhouse":
-            for board in source.get("boards", []):
+        # Board-based ATS sources: one config entry, many boards, each isolated.
+        if source_type in MULTI_BOARD:
+            module, key = MULTI_BOARD[source_type]
+            for board in source.get(key, []):
+                label = f"{source_type}:{board}"
                 try:
-                    found = greenhouse.collect(board, cfg.match_keywords)
+                    found = module.collect(board, cfg.match_keywords)
                     jobs.extend(found)
-                    log.info("source ok", extra={"source": f"greenhouse:{board}",
-                                                 "jobs": len(found)})
+                    log.info("source ok", extra={"source": label, "jobs": len(found)})
                 except Exception as exc:
-                    failures.append({"source": f"greenhouse:{board}", "error": str(exc)})
+                    failures.append({"source": label, "error": str(exc)})
                     log.warning("source failed",
-                                extra={"source": f"greenhouse:{board}", "error": str(exc)})
-            continue
-
-        handler = {"remoteok": remoteok.collect, "algolia": hackernews.collect}.get(source_type)
-        if handler is None:
-            log.warning("unknown source type", extra={"type": source_type})
+                                extra={"source": label, "error": str(exc)})
             continue
 
         name = source.get("id", source_type)
+
+        if source_type == "aggregator":
+            def handler(kw, _name=name):
+                return aggregators.collect(_name, kw)
+        else:
+            module = SINGLE.get(source_type)
+            if module is None:
+                log.warning("unknown source type", extra={"type": source_type})
+                continue
+
+            def handler(kw, _module=module):
+                return _module.collect(kw)
+
         try:
             found = handler(cfg.match_keywords)
             jobs.extend(found)
@@ -87,10 +119,22 @@ def handler(event: dict[str, Any] | None = None, context: Any = None) -> dict[st
     cfg = config_module.load()
 
     jobs, failures = _collect_all(cfg)
+
+    # US-only filter, applied centrally rather than in each normalizer: it is
+    # one policy, and duplicating it across eight sources would guarantee the
+    # sources drift apart. `raw_excerpt` is passed because Hacker News postings
+    # have no location field — "REMOTE (US)" only appears in the prose.
+    before = len(jobs)
+    if cfg.us_only:
+        jobs = [j for j in jobs if is_us(j.location, j.raw_excerpt)]
+        log.info("us filter applied",
+                 extra={"before": before, "after": len(jobs),
+                        "dropped": before - len(jobs)})
+
     unique = _deduplicate(jobs)
 
     total_sources = sum(
-        len(s.get("boards", [])) if s.get("type") == "greenhouse" else 1
+        len(s.get("boards", s.get("orgs", []))) if s.get("type") in MULTI_BOARD else 1
         for s in cfg.sources
     )
 
@@ -101,6 +145,7 @@ def handler(event: dict[str, Any] | None = None, context: Any = None) -> dict[st
     result = {
         "sources_total": total_sources,
         "sources_failed": len(failures),
+        "jobs_before_us_filter": before,
         "jobs_found": len(jobs),
         "jobs_unique": len(unique),
         "jobs_written": written,

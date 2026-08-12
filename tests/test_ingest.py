@@ -45,13 +45,16 @@ def cfg():
     )
 
 
-def _job(external_id="1", source="greenhouse:alpha"):
+def _job(external_id="1", source="greenhouse:alpha", location="Austin, TX"):
+    # A location is required: the handler applies a US-only filter, so a job
+    # with no location is legitimately dropped as "unknown is not United States".
     return Job(
         source=source,
         external_id=external_id,
         title="DevOps Engineer",
         company="alpha",
         url="https://example.com/1",
+        location=location,
     )
 
 
