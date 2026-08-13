@@ -10,6 +10,8 @@ with a static dashboard over a read API. Runs inside the AWS always-free tier.
 > **Status: complete.** Ingest runs every 6 hours across **94 sources** and
 > holds **~270 US DevOps roles**. Total AWS spend: **$0.00**.
 
+![The dashboard, showing US DevOps roles collected from 94 public job boards](docs/screenshots/dashboard-live.png)
+
 ```
 $ aws lambda invoke --function-name job-radar-dev-ingest /dev/stdout
 { "sources_total": 94, "sources_failed": 0, "jobs_before_us_filter": 478,
