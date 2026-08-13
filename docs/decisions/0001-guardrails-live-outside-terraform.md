@@ -37,9 +37,9 @@ not managed by Terraform and are not in any state file.
   is a documented manual prerequisite, not a gap.
 - The script must be idempotent, since there is no state file to tell it what
   already exists.
-- If an interviewer asks "why isn't this in Terraform?", the answer is the
-  general principle: **guardrails belong outside the system they guard.** The
-  same reasoning is why the Terraform state backend is bootstrapped separately.
+- The general principle: **guardrails belong outside the system they guard.**
+  The same reasoning is why the Terraform state backend is bootstrapped
+  separately.
 
 ## Related
 

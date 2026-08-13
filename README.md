@@ -20,7 +20,7 @@ $ aws lambda invoke --function-name job-radar-dev-ingest /dev/stdout
 
 I was applying to a few hundred DevOps roles and wanted one place that pulled
 postings from the boards I cared about. It also happens to be the shape of
-problem that exercises the parts of AWS that interviews actually probe: IAM,
+problem that exercises the parts of AWS that matter in practice: IAM,
 event-driven decoupling, retries and dead letters, and DynamoDB key design.
 
 ## Planned architecture
@@ -105,9 +105,8 @@ The guardrails script refuses to run with root credentials and is idempotent.
 | 8 | CI/CD — OIDC, plan-on-PR, apply-on-merge, checkov | ✅ done |
 | 9 | Cost review, teardown runbook, write-up | ✅ done |
 
-**All nine stages complete.** Full plain-English write-up of every decision and
-every bug: **[docs/WALKTHROUGH.md](docs/WALKTHROUGH.md)**. Operations:
-[docs/RUNBOOK.md](docs/RUNBOOK.md).
+**All nine stages complete.** Operations: [docs/RUNBOOK.md](docs/RUNBOOK.md).
+Design decisions are recorded as ADRs in [docs/decisions/](docs/decisions/).
 
 ## A queue I chose not to build
 

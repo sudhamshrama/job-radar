@@ -59,9 +59,9 @@ This is a constraint-driven decision, not an endorsement of access keys.
   accepted risk.
 - If this account ever moves to a paid plan for other reasons, the decision
   should be revisited — the blocker is purely the free-plan interaction.
-- The general lesson, and the one worth stating out loud: **security guidance is
-  written for the unconstrained case.** Knowing why you deviated, and what you
-  did to compensate, is the actual skill.
+- The general lesson: **security guidance is written for the unconstrained
+  case.** Recording why a deviation was necessary, and what compensates for it,
+  is the part that matters.
 
 ## Related
 
