@@ -27,8 +27,12 @@ key, which carries its own recurring charge (~$1/month).
 ## Decision
 
 Local developer access uses an **IAM user (`sudhamsh-admin`)** with
-`AdministratorAccess`, MFA enabled, and a long-lived access key configured
-through `aws configure`.
+`AdministratorAccess` and MFA enabled.
+
+**No long-lived access key exists.** Credentials are obtained with `aws login`,
+which exchanges the browser console session for temporary session credentials.
+Nothing is written to `~/.aws/credentials`; the session expires and is
+re-established on demand.
 
 IAM Identity Center and AWS Organizations are **not** enabled on this account.
 
@@ -42,23 +46,40 @@ much if the project cannot afford to exist.
 
 This is a constraint-driven decision, not an endorsement of access keys.
 
+**The accepted risk then disappeared.** The plan was an IAM user with a
+long-lived access key. Before creating one, the AWS CLI itself surfaced
+`aws login`, which brokers short-lived session credentials from the console
+session — the property Identity Center was wanted for, without the Organization
+that would have destroyed the free plan.
+
+So the outcome is better than the decision that was made: short-lived
+credentials, no Organization, no expired credits.
+
 ## Mitigations
 
 1. **CI never uses this key.** GitHub Actions authenticates via OIDC role
    assumption, which does not require Organizations. The pipeline holds no
    AWS credentials at all.
 2. MFA is enabled on the IAM user.
-3. The key is scoped to one human on one machine, and is rotatable.
-4. Possible hardening (Stage 8): reduce the IAM user's own policy to
-   `sts:AssumeRole` only, with an MFA condition, so the standing key is useless
-   without an explicit role assumption.
+3. Local credentials are **short-lived session credentials**, not a stored key.
+   There is no static secret on the laptop to leak or rotate.
+
+A further hardening was considered and **rejected as unnecessary**: restricting
+the IAM user to `sts:AssumeRole` with an MFA condition, so that a standing key
+would be useless on its own. That control exists to neutralise a long-lived
+key. There is no long-lived key here, so it would add a role-assumption step
+and defend against nothing.
 
 ## Consequences
 
-- A long-lived credential exists on the development laptop. This is the
-  accepted risk.
-- If this account ever moves to a paid plan for other reasons, the decision
-  should be revisited — the blocker is purely the free-plan interaction.
+- No credential is stored on the development laptop. Sessions expire, which
+  means re-authenticating during long working sessions.
+- `aws login` reads whichever console session is active. It picked up **root**
+  on the first attempt and had to be redirected to `sudhamsh-admin`, which is
+  why `scripts/00-guardrails.sh` refuses to run as root.
+- If this account ever moves to a paid plan for other reasons, Identity Center
+  becomes available and should be revisited — the blocker is purely the
+  free-plan interaction.
 - The general lesson: **security guidance is written for the unconstrained
   case.** Recording why a deviation was necessary, and what compensates for it,
   is the part that matters.
