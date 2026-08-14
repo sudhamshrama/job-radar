@@ -25,25 +25,33 @@ postings from the boards I cared about. It also happens to be the shape of
 problem that exercises the parts of AWS that matter in practice: IAM,
 event-driven decoupling, retries and dead letters, and DynamoDB key design.
 
-## Planned architecture
+## Architecture
 
 ```
-EventBridge Scheduler (cron)
+EventBridge Scheduler (every 6h)
         │
         ▼
-  ingest Lambda ──► SQS ──► normalize Lambda ──► DynamoDB
-        │            │                              │
-  public board      DLQ                      DynamoDB Streams
-     APIs                                           │
-                                                    ▼
-                                            notify Lambda ──► SNS ──► email
+  ingest Lambda ─────────────────────────────► DynamoDB
+   (94 sources, normalises in-process,               │
+    US-only filter, idempotent writes)        DynamoDB Streams
+                                               (filtered: INSERT only)
+                                                      │
+                                                      ▼
+                                              notify Lambda ──► SNS ──► email
+                                                      │
+                                                   on failure
+                                                      ▼
+                                                  SQS DLQ
 
   CloudFront ──► S3 (static dashboard)
        └──────► API Gateway (HTTP API) ──► query Lambda ──► DynamoDB
 ```
 
-Sources are documented public JSON APIs — Greenhouse job boards, Lever postings,
-Hacker News "Who is Hiring" via Algolia, and RemoteOK. No scraping.
+Sources are documented public JSON APIs, no scraping: **65 Greenhouse boards,
+18 Ashby orgs, 5 Lever orgs**, the Hacker News "Who is Hiring" thread via
+Algolia, RemoteOK, and four aggregators (Remotive, Arbeitnow, Jobicy,
+Himalayas). Every one was probed live before being added — of 117 plausible
+Greenhouse tokens, 52 returned 404.
 
 ## Cost posture
 
@@ -70,15 +78,15 @@ Guardrails are created before any resource exists — see
 ## Repository layout
 
 ```
-bootstrap/        Terraform state backend (run once, separately)
-infra/modules/    reusable Terraform modules
-infra/envs/       dev and prod compositions
-src/handlers/     Lambda entry points
-src/common/       shared code
-tests/            pytest, AWS mocked with moto
-scripts/          one-time operational scripts
-docs/decisions/   ADRs
-docs/screenshots/ evidence for each stage
+bootstrap/                 Terraform state backend (run once, separately)
+infra/modules/             reusable Terraform modules
+infra/envs/dev/            environment composition
+src/job_radar/handlers/    Lambda entry points (ingest, query, notify)
+src/job_radar/normalize/   one module per source shape
+src/config/sources.json    board tokens and keywords — config, not code
+tests/                     pytest, AWS mocked with moto
+scripts/                   one-time operational scripts
+docs/decisions/            ADRs
 ```
 
 ## Setup
@@ -120,11 +128,11 @@ a retry configuration and a failure mode, while removing none. That is
 infrastructure existing because a diagram called for it.
 
 Partial failure, the real problem a queue would have addressed here, is handled
-directly: each of the 14 sources is isolated, and one dead board is logged
+directly: each of the 94 sources is isolated, and one dead board is logged
 rather than failing the run. The handler raises only when *every* source fails,
 which is the difference between "a company retired its board" and "the network
 is gone" — and it is what makes the alarm worth keeping unmuted.
 
-SQS is planned where it genuinely earns its place: as a dead-letter queue on
-the DynamoDB Streams notify consumer, where a poison record otherwise blocks a
-shard indefinitely.
+SQS is used where it genuinely earns its place: as a dead-letter queue on the
+DynamoDB Streams notify consumer, where a poison record would otherwise block a
+shard until it expires.
